@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from time import sleep
+from sys import argv
+from sys import stdout
+from sys import stderr
+from sys import stdin
+from os import mkfifo
+from os import stat
+from math import sqrt
+
+path_to = "../push_index/.index.db" if len(argv) != 2 else argv[1] + ".index.db"
+
+def get_average(period, index, list):
+	average = 0.0
+	save = period
+	index = len(list) - 1
+	while (period > 0):
+		average += list[index]
+		index -= 1
+		period -= 1
+	average = average / save
+	return average
+
+def get_standard_dev(period, index, list):
+	result = 0.0
+	save = period
+	average = get_average(period, index, list)
+	index = len(list) - 1
+	while (period > 0):
+		result += pow((list[index] - average), 2)
+		period -= 1
+		index -= 1
+	result = result / save
+	result = sqrt(result)
+	return result
+
+def get_current_index(marketplace):
+	try:
+		mkfifo(path_to)
+	except OSError:
+		pass
+	my_value = -1
+	fifo = open(path_to, "r")
+	for line in fifo:
+		if (line.split(':')[0] == marketplace):
+			my_value = float(line.split(':')[1])
+			break
+	fifo.close()
+	return my_value
+
+def get_current_indexes(market_places_indexes):
+	tmp = get_current_index('crypto')
+	if tmp > 0:
+		market_places_indexes["crypto"].append(tmp)
+	tmp = get_current_index('raw_material')
+	if tmp > 0:
+		market_places_indexes["raw_material"].append(tmp)
+	tmp = get_current_index('forex')
+	if tmp > 0:
+		market_places_indexes["forex"].append(tmp)
+	tmp = get_current_index('stock_exchange')
+	if tmp > 0:
+		market_places_indexes["stock_exchange"].append(tmp)
+	return market_places_indexes
+
+def buy_on_marketplace(market_places_indexes, marketPlace, i, money, stock):
+	average = get_average(27, i, market_places_indexes[marketPlace])
+	standard_dev = get_standard_dev(27, i, market_places_indexes[marketPlace])
+	u_band = average + (standard_dev * 2)
+	l_band = average - (standard_dev * 2)
+	value = market_places_indexes[marketPlace][-1]
+	macd = (value * 2) / (i + 1) + (average * (1 - (2 / (i + 1))))
+	if (macd > 0 or value < l_band) and money >= value:
+		tmp = int(money / value)
+		print("BUY:%d:%s" % (tmp, marketPlace))
+		stdout.flush()
+		sleep(0.5)
+		stock += tmp
+		money -= (stock * value)
+	elif stock > 0 and (macd <= 0 or value > u_band):
+		print("SELL:%d:%s" % (stock, marketPlace))
+		stdout.flush()
+		sleep(0.5)
+		money += (stock * value)
+		stock = 0
+	return money, stock
+
+def sell_if_needed(stock):
+	if stock["crypto"] > 0:
+		print("SELL:%d:%s" % (stock["crypto"], "crypto"))
+		stdout.flush()
+		sleep(0.5)
+	if stock["stock_exchange"]  > 0:
+		print("SELL:%d:%s" % (stock["stock_exchange"], "stock_exchange"))
+		stdout.flush()
+		sleep(0.5)
+	if stock["raw_material"]  > 0:
+		print("SELL:%d:%s" % (stock["raw_material"], "raw_material"))
+		stdout.flush()
+		sleep(0.5)
+
+def main():
+	market_places_indexes = {"crypto": [get_current_index('crypto')],
+			"raw_material": [get_current_index('raw_material')],
+			"forex": [get_current_index('forex')],
+			"stock_exchange": [get_current_index('stock_exchange')]}
+	stock = {"crypto": 0, "raw_material": 0, "forex": 0, "stock_exchange": 0}
+	money = 10000.0
+	last_modif = stat(path_to).st_mtime
+	sleep(0.5)
+	i = 0
+	timeout = 0
+	while (i < 28 and timeout < 600):
+		if last_modif != stat(path_to).st_mtime:
+			last_modif = stat(path_to).st_mtime
+			sleep(0.05)
+			market_places_indexes = get_current_indexes(market_places_indexes)
+			i += 1
+			timeout = 0
+		else:
+			sleep(0.05)
+			timeout += 1
+	timeout = 0
+	while (i < 600 and timeout < 600):
+		if last_modif != stat(path_to).st_mtime:
+			last_modif = stat(path_to).st_mtime
+			sleep(0.05)
+			market_places_indexes = get_current_indexes(market_places_indexes)
+			money, stock["crypto"] = buy_on_marketplace(market_places_indexes, "crypto", i, money, stock["crypto"])
+			money, stock["stock_exchange"] = buy_on_marketplace(market_places_indexes, "stock_exchange", i, money, stock["stock_exchange"])
+			money, stock["raw_material"] = buy_on_marketplace(market_places_indexes, "raw_material", i, money, stock["raw_material"])
+			i += 1
+			timeout = 0
+		else:
+			sleep(0.05)
+			timeout += 1
+	sell_if_needed(stock)
+	print("EXIT")
+	stdout.flush()
+	sleep(0.5)
+
+if (__name__ == '__main__'):
+	if len(argv) > 2:
+		stderr.write("USAGE : ./trade [path to .index.db]\n")
+		exit(84)
+	main()
